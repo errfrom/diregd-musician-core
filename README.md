@@ -1,0 +1,1 @@
+# diregd-musician-core

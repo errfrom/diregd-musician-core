@@ -1,0 +1,42 @@
+name:                diregd-musician-core
+version:             0.1.0.0
+github:              "errfrom/diregd-musician-core"
+author:              "Dzmitry Shuisky"
+maintainer:          "errfrom@yandex.ru"
+copyright:           "2018 Dzmitry Shuisky"
+
+extra-source-files:
+- README.md
+
+synopsis:            The innovative approach to music writing being developed for composers.
+
+description:         Please see the README on GitHub at
+                     <https://github.com/errfrom/diregd-musician-core#readme>
+
+dependencies:
+- base >= 4.7 && < 5
+
+library:
+  source-dirs: src
+
+executables:
+  diregd-musician-core-exe:
+    main:                Main.hs
+    source-dirs:         app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - diregd-musician-core
+
+tests:
+  diregd-musician-core-test:
+    main:                Spec.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - diregd-musician-core
