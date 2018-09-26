@@ -35,7 +35,8 @@ executables:
     - -fobject-code
     - -O0
     - -Wall
-    extra-libraries: portaudio
+    extra-libraries:
+    - portaudio
     extra-lib-dirs: ./pa_stable/portaudio/lib/.libs
     dependencies:
     - diregd-musician-core

@@ -8,7 +8,7 @@ import           Control.Monad.Trans.Reader (ReaderT(runReaderT), ask)
 import           Control.Monad.IO.Class     (liftIO)
 import           Data.IORef                 (IORef, modifyIORef', readIORef, newIORef)
 import           Foreign.Ptr                (Ptr)
-import qualified Foreign.Ptr       as Ptr   (plusPtr)
+import qualified Foreign.Ptr       as Ptr   (plusPtr, nullPtr)
 import           Foreign.Storable           (Storable)
 import qualified Language.C.Inline as C
 import qualified Foreign.C.String  as C     (peekCAString)
@@ -17,6 +17,7 @@ import           Foreign.Marshal.Alloc      (malloc, free)
 
 C.context (C.baseCtx <> C.bsCtx)
 C.include "<portaudio.h>"
+C.include "<alsa/asoundlib.h>"
 C.include "<stdlib.h>"
 C.include "<string.h>"
 
@@ -59,12 +60,17 @@ audioDevicesAvailable = do
   ptrErrorCode <- dmmMalloc :: Ptr' CLong
   ptrDeviceNames <- dmmMalloc :: Ptr' (Ptr CChar)
   cResult <- liftIO $ [C.block| int {
+    void phantom_error_handler(const char* file, int line, const char* fun,
+                               int err, const char* fmt,...) { ; };
+    snd_lib_error_set_handler(&phantom_error_handler);
+    Pa_Initialize();
     PaDeviceIndex numDevices = Pa_GetDeviceCount();
     if (numDevices < 0) {
-      $(long* ptrErrorCode) = (long*) &numDevices;
+      *$(long* ptrErrorCode) = numDevices;
       return 1;
     } else {
       PaDeviceInfo* deviceInfo = (PaDeviceInfo*) malloc(sizeof(PaDeviceInfo));
+      $(char** ptrDeviceNames) = (char**) calloc(numDevices, 50 * sizeof(char*));
       char** deviceNames = $(char** ptrDeviceNames);
       for (size_t i=0; i<numDevices; i++) {
         deviceInfo = Pa_GetDeviceInfo(i);
@@ -108,6 +114,7 @@ audioDevicesAvailable = do
                   case (toEnum . fromIntegral $ cResult) of
                     False -> do
                       res <- liftIO (C.peekCAString ptrDeviceName) >>= return . Device
+                      liftIO $ print res
                       rest <- worker (Ptr.plusPtr ptrDeviceNames 1)
                       return $ res:rest
                     True -> return []
