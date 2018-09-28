@@ -9,7 +9,7 @@ import           Control.Monad.IO.Class     (liftIO)
 import           Data.IORef                 (IORef, modifyIORef', readIORef, newIORef)
 import           Foreign.Ptr                (Ptr)
 import qualified Foreign.Ptr       as Ptr   (plusPtr, nullPtr)
-import           Foreign.Storable           (Storable)
+import           Foreign.Storable           (Storable, sizeOf)
 import qualified Language.C.Inline as C
 import qualified Foreign.C.String  as C     (peekCAString)
 import           Foreign.C.Types            (CLong, CChar)
@@ -70,21 +70,23 @@ audioDevicesAvailable = do
       return 1;
     } else {
       PaDeviceInfo* deviceInfo = (PaDeviceInfo*) malloc(sizeof(PaDeviceInfo));
-      $(char** ptrDeviceNames) = (char**) calloc(numDevices, 50 * sizeof(char*));
+      $(char** ptrDeviceNames) = (char**) malloc(numDevices * sizeof(char*));
       char** deviceNames = $(char** ptrDeviceNames);
       for (size_t i=0; i<numDevices; i++) {
         deviceInfo = Pa_GetDeviceInfo(i);
-        *(deviceNames + i) = deviceInfo->name;
+        size_t nameLength = strlen(deviceInfo->name) + 1;
+        *(deviceNames + i) = (char*) malloc(nameLength * sizeof(char));
+        strcpy(*(deviceNames + i), deviceInfo->name);
       }
-      *(deviceNames + 1) = '\0';
-      deviceNames -= numDevices + 1; /* Make it point to the first element. */
-      return 0;
+      return numDevices;
     }
   } |]
-  result <- case (toEnum . fromIntegral $ cResult) of
-    False -> Right <$> buildDevicesList ptrDeviceNames
-    True -> Left <$> obtainPAError ptrErrorCode
-  freeMM >> return result;
+  liftIO $ print cResult
+  result <- if (fromIntegral cResult == 1)
+              then Left <$> obtainPAError ptrErrorCode
+              else let numDevices = fromIntegral cResult
+                   in Right <$> buildDevicesList ptrDeviceNames numDevices
+  return result;
   where obtainPAError :: Ptr CLong -> DMM PortAudioError
         obtainPAError ptrErrorCode = do
           ptrErrorText <- dmmMalloc :: Ptr' CChar
@@ -97,27 +99,22 @@ audioDevicesAvailable = do
           let errorCode = fromIntegral errorCode' :: Int
           return PortAudioError{..}
 
-        buildDevicesList :: Ptr (Ptr CChar) -> DMM DevicesList
-        buildDevicesList ptrDeviceNames = worker ptrDeviceNames
-          where worker :: Ptr (Ptr CChar) -> DMM DevicesList
-                worker ptrDeviceNames = do
-                  ptrDeviceName <- dmmMalloc :: Ptr' CChar
-                  cResult <- liftIO $ [C.block| int {
-                    char* deviceName = *$(char** ptrDeviceNames);
-                    if (*deviceName == '\0') {
-                      return 1;
-                    } else {
-                      strcpy($(char* ptrDeviceName), deviceName);
-                      return 0;
-                    }
-                  } |]
-                  case (toEnum . fromIntegral $ cResult) of
-                    False -> do
-                      res <- liftIO (C.peekCAString ptrDeviceName) >>= return . Device
-                      liftIO $ print res
-                      rest <- worker (Ptr.plusPtr ptrDeviceNames 1)
-                      return $ res:rest
-                    True -> return []
+        buildDevicesList :: Ptr (Ptr CChar) -> Int -> DMM DevicesList
+        buildDevicesList _ 0 = return []
+        buildDevicesList ptrDeviceNames numDevices = do
+          ptrDeviceName <- dmmMalloc :: Ptr' CChar
+          liftIO $ print "wow"
+          liftIO $ [C.block| int {
+            size_t nameLength = strlen(*$(char** ptrDeviceNames)) + 1;
+            $(char* ptrDeviceName) = (char*) malloc(nameLength * sizeof(char));
+            strcpy($(char* ptrDeviceName), *$(char** ptrDeviceNames));
+            return 0;
+          } |]
+          liftIO $ C.peekCAString ptrDeviceName >>= print
+          device <- liftIO (C.peekCAString ptrDeviceName) >>= return . Device
+          let s = sizeOf ptrDeviceNames
+          restDevices <- buildDevicesList (Ptr.plusPtr ptrDeviceNames s) (pred numDevices)
+          return $ device:restDevices
 
 main :: IO ()
 main = do
