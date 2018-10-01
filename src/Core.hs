@@ -4,16 +4,16 @@
 
 module Core ( audioDevicesAvailable, main ) where
 
-import           Control.Monad.Trans.Reader (ReaderT(runReaderT), ask)
-import           Control.Monad.IO.Class     (liftIO)
-import           Data.IORef                 (IORef, modifyIORef', readIORef, newIORef)
-import           Foreign.Ptr                (Ptr)
-import qualified Foreign.Ptr       as Ptr   (plusPtr, nullPtr)
-import           Foreign.Storable           (Storable, sizeOf)
-import qualified Language.C.Inline as C
-import qualified Foreign.C.String  as C     (peekCAString)
-import           Foreign.C.Types            (CLong, CChar)
-import           Foreign.Marshal.Alloc      (malloc, free)
+import qualified Language.C.Inline          as C
+import           Foreign.Ptr                       (Ptr)
+import qualified Foreign.Ptr                as Ptr (plusPtr)
+import           Foreign.Storable                  (sizeOf)
+import qualified Foreign.C.String           as C   (peekCAString)
+import           Foreign.C.Types                   (CLong, CChar)
+import           Control.Monad.Trans.Reader        (ReaderT(runReaderT))
+import           Control.Monad.IO.Class            (liftIO)
+import           Data.IORef                        (newIORef)
+import           Internal.HeapPM                   (HeapPM, Ptr', pmMalloc, pmFreeAll)
 
 C.context (C.baseCtx <> C.bsCtx)
 C.include "<portaudio.h>"
@@ -30,35 +30,10 @@ data PortAudioError = PortAudioError
   , errorText :: String }
   deriving (Show)
 
--- Existential datatype that handles pointers of any type.
-data AnyPtr = forall a. Storable a => AnyPtr (Ptr a)
-
--- Reader transformer that stores all the pointers initialized with malloc.
--- So one has the capability to manage memory freed that way.
-type HeapPM a = ReaderT (IORef [AnyPtr]) IO a
-
-dmmMalloc :: forall a. Storable a => HeapPM (Ptr a)
-dmmMalloc = do
-  ptr <- liftIO malloc :: HeapPM (Ptr a)
-  heapPointers <- ask
-  liftIO $ modifyIORef' heapPointers (\hp -> AnyPtr ptr : hp)
-  return ptr
-
-freeMM :: HeapPM ()
-freeMM = do
-  heapPointers <- ask
-  liftIO $ do
-    heapPointers' <- readIORef heapPointers
-    mapM_ worker heapPointers'
-    modifyIORef' heapPointers (\_ -> [])
-  where worker (AnyPtr ptr) = free ptr
-
-type Ptr' a = HeapPM (Ptr a)
-
 audioDevicesAvailable :: HeapPM (Either PortAudioError DevicesList)
 audioDevicesAvailable = do
-  ptrErrorCode <- dmmMalloc :: Ptr' CLong
-  ptrDeviceNames <- dmmMalloc :: Ptr' (Ptr CChar)
+  ptrErrorCode <- pmMalloc :: Ptr' CLong
+  ptrDeviceNames <- pmMalloc :: Ptr' (Ptr CChar)
   cResult <- liftIO $ [C.block| int {
     void phantom_error_handler(const char* file, int line, const char* fun,
                                int err, const char* fmt,...) { ; };
@@ -86,10 +61,12 @@ audioDevicesAvailable = do
               then Left <$> obtainPAError ptrErrorCode
               else let numDevices = fromIntegral cResult
                    in Right <$> buildDevicesList ptrDeviceNames numDevices
+  r <- pmFreeAll
+  liftIO $ print r
   return result;
   where obtainPAError :: Ptr CLong -> HeapPM PortAudioError
         obtainPAError ptrErrorCode = do
-          ptrErrorText <- dmmMalloc :: Ptr' CChar
+          ptrErrorText <- pmMalloc :: Ptr' CChar
           _ <- liftIO $ [C.block| int {
             strcpy($(char* ptrErrorText), Pa_GetErrorText(*$(long* ptrErrorCode)));
             return 0;
@@ -102,7 +79,7 @@ audioDevicesAvailable = do
         buildDevicesList :: Ptr (Ptr CChar) -> Int -> HeapPM DevicesList
         buildDevicesList _ 0 = return []
         buildDevicesList ptrDeviceNames numDevices = do
-          ptrDeviceName <- dmmMalloc :: Ptr' CChar
+          ptrDeviceName <- pmMalloc :: Ptr' CChar
           liftIO $ print "wow"
           liftIO $ [C.block| int {
             size_t nameLength = strlen(*$(char** ptrDeviceNames)) + 1;
