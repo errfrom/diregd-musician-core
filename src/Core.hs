@@ -30,32 +30,32 @@ data PortAudioError = PortAudioError
   , errorText :: String }
   deriving (Show)
 
+-- Existential datatype that handles pointers of any type.
 data AnyPtr = forall a. Storable a => AnyPtr (Ptr a)
 
-data DynamicMemoryManager = DynamicMemoryManager
-  { heapPointers :: IORef [AnyPtr] }
+-- Reader transformer that stores all the pointers initialized with malloc.
+-- So one has the capability to manage memory freed that way.
+type HeapPM a = ReaderT (IORef [AnyPtr]) IO a
 
-type DMM a = ReaderT DynamicMemoryManager IO a
-
-dmmMalloc :: forall a. Storable a => DMM (Ptr a)
+dmmMalloc :: forall a. Storable a => HeapPM (Ptr a)
 dmmMalloc = do
-  ptr <- liftIO malloc :: DMM (Ptr a)
-  DynamicMemoryManager{..} <- ask
+  ptr <- liftIO malloc :: HeapPM (Ptr a)
+  heapPointers <- ask
   liftIO $ modifyIORef' heapPointers (\hp -> AnyPtr ptr : hp)
   return ptr
 
-freeMM :: DMM ()
+freeMM :: HeapPM ()
 freeMM = do
-  DynamicMemoryManager{..} <- ask
+  heapPointers <- ask
   liftIO $ do
     heapPointers' <- readIORef heapPointers
     mapM_ worker heapPointers'
     modifyIORef' heapPointers (\_ -> [])
   where worker (AnyPtr ptr) = free ptr
 
-type Ptr' a = DMM (Ptr a)
+type Ptr' a = HeapPM (Ptr a)
 
-audioDevicesAvailable :: DMM (Either PortAudioError DevicesList)
+audioDevicesAvailable :: HeapPM (Either PortAudioError DevicesList)
 audioDevicesAvailable = do
   ptrErrorCode <- dmmMalloc :: Ptr' CLong
   ptrDeviceNames <- dmmMalloc :: Ptr' (Ptr CChar)
@@ -87,7 +87,7 @@ audioDevicesAvailable = do
               else let numDevices = fromIntegral cResult
                    in Right <$> buildDevicesList ptrDeviceNames numDevices
   return result;
-  where obtainPAError :: Ptr CLong -> DMM PortAudioError
+  where obtainPAError :: Ptr CLong -> HeapPM PortAudioError
         obtainPAError ptrErrorCode = do
           ptrErrorText <- dmmMalloc :: Ptr' CChar
           _ <- liftIO $ [C.block| int {
@@ -99,7 +99,7 @@ audioDevicesAvailable = do
           let errorCode = fromIntegral errorCode' :: Int
           return PortAudioError{..}
 
-        buildDevicesList :: Ptr (Ptr CChar) -> Int -> DMM DevicesList
+        buildDevicesList :: Ptr (Ptr CChar) -> Int -> HeapPM DevicesList
         buildDevicesList _ 0 = return []
         buildDevicesList ptrDeviceNames numDevices = do
           ptrDeviceName <- dmmMalloc :: Ptr' CChar
@@ -119,6 +119,5 @@ audioDevicesAvailable = do
 main :: IO ()
 main = do
   heapPointers <- newIORef []
-  let dmm = DynamicMemoryManager{..}
-  result <- runReaderT audioDevicesAvailable dmm
+  result <- runReaderT audioDevicesAvailable heapPointers
   print result
