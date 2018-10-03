@@ -16,9 +16,11 @@ description:         Please see the README on GitHub at
 dependencies:
 - base >= 4.7 && < 5
 - inline-c
+- derive-storable
 - bytestring
 - text
-- transformers
+- resourcet
+- monad-logger
 
 library:
   source-dirs: src
@@ -49,5 +51,6 @@ tests:
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N
+    - -Wall
     dependencies:
     - diregd-musician-core
